@@ -1,9 +1,13 @@
 mod tools;
+mod undo;
 
 use eframe::{egui, epaint::StrokeKind};
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
 
-use crate::tools::Tool;
+use crate::{
+    tools::Tool,
+    undo::{UndoAction, UndoStack},
+};
 
 struct Line {
     points: Vec<Pos2>,
@@ -14,14 +18,62 @@ struct Line {
 pub struct WhiteboardApp {
     lines: Vec<Line>,
     current_line: Vec<Pos2>,
-    // 將單一顏色替換為五個顏色的陣列
     palette: [Color32; 5],
-    // 追蹤目前選取的顏色索引
     active_color_index: usize,
     stroke_width: f32,
     current_tool: Tool,
+    undo_stack: UndoStack,
 }
 
+impl WhiteboardApp {
+    fn handle_keyboard_event(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    match key {
+                        egui::Key::Z if modifiers.command => {
+                            self.undo();
+                        }
+                        egui::Key::C if !modifiers.command => {
+                            self.lines.clear();
+                        }
+                        egui::Key::B if !modifiers.command => {
+                            self.current_tool = Tool::Brush;
+                        }
+                        egui::Key::E if !modifiers.command => {
+                            self.current_tool = Tool::Eraser;
+                        }
+                        egui::Key::Num1 => self.active_color_index = 0,
+                        egui::Key::Num2 => self.active_color_index = 1,
+                        egui::Key::Num3 => self.active_color_index = 2,
+                        egui::Key::Num4 => self.active_color_index = 3,
+                        egui::Key::Num5 => self.active_color_index = 4,
+                        _ => {}
+                    }
+                }
+            }
+        })
+    }
+    fn undo(&mut self) {
+        match self.undo_stack.pop() {
+            None => {}
+            Some(action) => match action {
+                UndoAction::Erase(line) => {
+                    self.lines.push(line);
+                }
+                UndoAction::Draw(_line) => {
+                    self.lines.pop();
+                }
+            },
+        }
+    }
+}
 impl Default for WhiteboardApp {
     fn default() -> Self {
         Self {
@@ -38,6 +90,7 @@ impl Default for WhiteboardApp {
             active_color_index: 0,
             stroke_width: 3.0,
             current_tool: Tool::default(),
+            undo_stack: UndoStack::default(),
         }
     }
 }
@@ -55,6 +108,7 @@ fn distance_point_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 
 impl eframe::App for WhiteboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_keyboard_event(ctx);
         // 設定側邊控制面板
         egui::SidePanel::left("control_panel").show(ctx, |ui| {
             ui.heading("toolbar");
@@ -206,22 +260,24 @@ impl eframe::App for WhiteboardApp {
                         if response.clicked() || response.dragged() {
                             let erase_radius = self.stroke_width + 5.0; // 給予一點點擊容差
 
-                            self.lines.retain(|line| {
-                                let mut hit = false;
-                                // 檢查游標是否觸碰到這條線的任何一個線段
-                                for window in line.points.windows(2) {
-                                    if distance_point_to_segment(
-                                        pointer_pos,
-                                        window[0],
-                                        window[1],
-                                    ) < erase_radius
-                                    {
-                                        hit = true;
-                                        break;
+                            let (kept, deleted): (Vec<_>, Vec<_>) =
+                                self.lines.drain(..).partition(|line| {
+                                    for window in line.points.windows(2) {
+                                        if distance_point_to_segment(
+                                            pointer_pos,
+                                            window[0],
+                                            window[1],
+                                        ) < erase_radius
+                                        {
+                                            return false; // false 會進 deleted
+                                        }
                                     }
-                                }
-                                !hit // 回傳 true 保留線條，回傳 false 將其刪除
-                            });
+                                    true
+                                });
+
+                            self.lines = kept;
+                            let deleted_lines = deleted;
+                            self.undo_stack.extend_erase(deleted_lines);
                         }
                     }
                 }
@@ -231,6 +287,11 @@ impl eframe::App for WhiteboardApp {
             if response.drag_stopped() && self.current_tool == Tool::Brush {
                 if !self.current_line.is_empty() {
                     self.lines.push(Line {
+                        points: self.current_line.clone(),
+                        color: self.palette[self.active_color_index],
+                        width: self.stroke_width,
+                    });
+                    self.undo_stack.add_draw(Line {
                         points: self.current_line.clone(),
                         color: self.palette[self.active_color_index],
                         width: self.stroke_width,
