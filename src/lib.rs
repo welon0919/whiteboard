@@ -1,5 +1,9 @@
+mod tools;
+
 use eframe::{egui, epaint::StrokeKind};
-use egui::{Color32, Pos2, Stroke};
+use egui::{Color32, Pos2, Stroke, pos2, vec2};
+
+use crate::tools::Tool;
 
 struct Line {
     points: Vec<Pos2>,
@@ -15,6 +19,7 @@ pub struct WhiteboardApp {
     // 追蹤目前選取的顏色索引
     active_color_index: usize,
     stroke_width: f32,
+    current_tool: Tool,
 }
 
 impl Default for WhiteboardApp {
@@ -32,82 +37,147 @@ impl Default for WhiteboardApp {
             ],
             active_color_index: 0,
             stroke_width: 3.0,
+            current_tool: Tool::default(),
         }
     }
+}
+// helper function to calculate the distance from a point to a line
+fn distance_point_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let l2 = a.distance_sq(b);
+    if l2 == 0.0 {
+        return p.distance(a);
+    }
+    let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
+    let t = t.clamp(0.0, 1.0);
+    let projection = pos2(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
+    p.distance(projection)
 }
 
 impl eframe::App for WhiteboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 設定側邊控制面板
         egui::SidePanel::left("control_panel").show(ctx, |ui| {
-            ui.heading("Brush settings");
-
+            ui.heading("toolbar");
             ui.add_space(5.0);
-            ui.label("Select color:");
 
+            // 工具切換區塊
             ui.horizontal(|ui| {
-                for i in 0..5 {
-                    let is_selected = i == self.active_color_index;
+                let tools = [
+                    (
+                        Tool::Brush,
+                        egui::include_image!("../assets/tools/brush.png"),
+                        "brush",
+                    ),
+                    (
+                        Tool::Eraser,
+                        egui::include_image!("../assets/tools/eraser.png"),
+                        "eraser",
+                    ),
+                ];
+
+                for (tool, path, tooltip) in tools {
+                    let is_selected = self.current_tool == tool;
 
                     let frame = if is_selected {
-                        egui::Frame::none()
+                        egui::Frame::new()
                             .stroke(egui::Stroke::new(
                                 2.0,
                                 ui.visuals().text_color(),
                             ))
                             .inner_margin(2.0)
-                            .rounding(4.0)
+                            .corner_radius(4.0)
                     } else {
-                        egui::Frame::none().inner_margin(4.0)
+                        egui::Frame::new().inner_margin(4.0)
                     };
 
                     frame.show(ui, |ui| {
-                        if is_selected {
-                            ui.color_edit_button_srgba(&mut self.palette[i]);
-                        } else {
-                            let size = egui::vec2(
-                                ui.spacing().interact_size.y,
-                                ui.spacing().interact_size.y,
-                            );
-                            let (rect, response) = ui.allocate_exact_size(
-                                size,
-                                egui::Sense::click(),
-                            );
-
-                            if ui.is_rect_visible(rect) {
-                                let rounding = 2.0;
-                                ui.painter().rect_filled(
-                                    rect,
-                                    rounding,
-                                    self.palette[i],
-                                );
-                                ui.painter().rect_stroke(
-                                    rect,
-                                    rounding,
-                                    egui::Stroke::new(
-                                        1.0,
-                                        ui.visuals()
-                                            .widgets
-                                            .inactive
-                                            .bg_stroke
-                                            .color,
-                                    ),
-                                    StrokeKind::Outside,
-                                );
-                            }
-
-                            if response.clicked() {
-                                self.active_color_index = i;
-                            }
+                        let img = egui::Image::new(path)
+                            .fit_to_exact_size(vec2(30.0, 30.0));
+                        if ui
+                            .add(egui::Button::image(img))
+                            .on_hover_text(tooltip)
+                            .clicked()
+                        {
+                            self.current_tool = tool;
                         }
                     });
                 }
+            });
+
+            ui.add_space(15.0);
+            ui.separator();
+            ui.add_space(15.0);
+
+            // 當使用畫筆時才允許調整顏色
+            ui.add_enabled_ui(self.current_tool == Tool::Brush, |ui| {
+                ui.label("Color selection");
+                ui.horizontal(|ui| {
+                    for i in 0..5 {
+                        let is_selected = i == self.active_color_index;
+
+                        let frame = if is_selected {
+                            egui::Frame::new()
+                                .stroke(egui::Stroke::new(
+                                    2.0,
+                                    ui.visuals().text_color(),
+                                ))
+                                .inner_margin(2.0)
+                                .corner_radius(4.0)
+                        } else {
+                            egui::Frame::new().inner_margin(4.0)
+                        };
+
+                        frame.show(ui, |ui| {
+                            if is_selected {
+                                ui.color_edit_button_srgba(
+                                    &mut self.palette[i],
+                                );
+                            } else {
+                                let size = egui::vec2(
+                                    ui.spacing().interact_size.y,
+                                    ui.spacing().interact_size.y,
+                                );
+                                let (rect, response) = ui.allocate_exact_size(
+                                    size,
+                                    egui::Sense::click(),
+                                );
+
+                                if ui.is_rect_visible(rect) {
+                                    let rounding = 2.0;
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        rounding,
+                                        self.palette[i],
+                                    );
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        rounding,
+                                        egui::Stroke::new(
+                                            1.0,
+                                            ui.visuals()
+                                                .widgets
+                                                .inactive
+                                                .bg_stroke
+                                                .color,
+                                        ),
+                                        StrokeKind::Outside,
+                                    );
+                                }
+
+                                if response.clicked() {
+                                    self.active_color_index = i;
+                                }
+                            }
+                        });
+                    }
+                });
             });
 
             ui.add_space(10.0);
 
             ui.add(
                 egui::Slider::new(&mut self.stroke_width, 1.0..=20.0)
-                    .text("Stroke width"),
+                    .text("Stroke Width"),
             );
 
             ui.add_space(20.0);
@@ -117,30 +187,59 @@ impl eframe::App for WhiteboardApp {
             }
         });
 
+        // 畫布區域
         egui::CentralPanel::default().show(ctx, |ui| {
             let (response, painter) =
                 ui.allocate_painter(ui.available_size(), egui::Sense::drag());
 
             if let Some(pointer_pos) = response.interact_pointer_pos() {
-                if response.dragged() {
-                    // 如果正在拖曳，將點加入當前線條
-                    if self.current_line.last() != Some(&pointer_pos) {
-                        self.current_line.push(pointer_pos);
+                match self.current_tool {
+                    Tool::Brush => {
+                        if response.dragged() {
+                            if self.current_line.last() != Some(&pointer_pos) {
+                                self.current_line.push(pointer_pos);
+                            }
+                        }
+                    }
+                    Tool::Eraser => {
+                        // 支援點擊或拖曳時刪除線條
+                        if response.clicked() || response.dragged() {
+                            let erase_radius = self.stroke_width + 5.0; // 給予一點點擊容差
+
+                            self.lines.retain(|line| {
+                                let mut hit = false;
+                                // 檢查游標是否觸碰到這條線的任何一個線段
+                                for window in line.points.windows(2) {
+                                    if distance_point_to_segment(
+                                        pointer_pos,
+                                        window[0],
+                                        window[1],
+                                    ) < erase_radius
+                                    {
+                                        hit = true;
+                                        break;
+                                    }
+                                }
+                                !hit // 回傳 true 保留線條，回傳 false 將其刪除
+                            });
+                        }
                     }
                 }
             }
 
-            if response.drag_stopped() {
+            // 畫筆模式下，放開拖曳時儲存線條
+            if response.drag_stopped() && self.current_tool == Tool::Brush {
                 if !self.current_line.is_empty() {
                     self.lines.push(Line {
                         points: self.current_line.clone(),
-                        color: self.palette[self.active_color_index], // 採用當前選取的調色盤顏色
+                        color: self.palette[self.active_color_index],
                         width: self.stroke_width,
                     });
                     self.current_line.clear();
                 }
             }
 
+            // 繪製所有已存檔的線條
             for line in &self.lines {
                 if line.points.len() >= 2 {
                     let points = line.points.clone();
@@ -151,10 +250,11 @@ impl eframe::App for WhiteboardApp {
                 }
             }
 
-            if self.current_line.len() >= 2 {
+            // 繪製正在畫的線條（僅限畫筆模式）
+            if self.current_tool == Tool::Brush && self.current_line.len() >= 2
+            {
                 painter.add(egui::Shape::line(
                     self.current_line.clone(),
-                    // 繪製預覽線條時也採用當前選取的顏色
                     Stroke::new(
                         self.stroke_width,
                         self.palette[self.active_color_index],

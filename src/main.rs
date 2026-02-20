@@ -6,6 +6,7 @@ fn main() -> eframe::Result<()> {
         "Simple Whiteboard",
         native_options,
         Box::new(|ctx| {
+            egui_extras::install_image_loaders(&ctx.egui_ctx);
             let style = Style {
                 visuals: Visuals::dark(),
                 ..Default::default()
