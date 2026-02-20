@@ -2,6 +2,8 @@ mod state;
 mod tools;
 mod undo;
 
+use std::{io, path::PathBuf};
+
 use directories::UserDirs;
 use eframe::{egui, epaint::StrokeKind};
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
@@ -23,11 +25,12 @@ struct Line {
 pub struct WhiteboardApp {
     lines: Vec<Line>,
     current_line: Vec<Pos2>,
-    palette: [Color32; 5],
+    palette: Vec<Color32>,
     active_color_index: usize,
     stroke_width: f32,
     current_tool: Tool,
     undo_stack: UndoStack,
+    whiteboard_file: Option<PathBuf>,
 }
 
 impl WhiteboardApp {
@@ -57,6 +60,9 @@ impl WhiteboardApp {
                         egui::Key::S if modifiers.command => {
                             self.save_whiteboard()
                         }
+                        egui::Key::O if modifiers.command => {
+                            self.open_whiteboard_file();
+                        }
                         egui::Key::Num1 => self.active_color_index = 0,
                         egui::Key::Num2 => self.active_color_index = 1,
                         egui::Key::Num3 => self.active_color_index = 2,
@@ -81,13 +87,13 @@ impl WhiteboardApp {
             },
         }
     }
-    fn save_whiteboard(&self) {
+    fn save_whiteboard(&mut self) {
         let default_path = UserDirs::new()
             .and_then(|user_dirs| {
                 user_dirs.download_dir().map(|p| p.to_path_buf())
             })
             .unwrap_or(std::env::current_dir().unwrap_or_default());
-        let whiteboard_state = WhiteboardState::from(self);
+        let whiteboard_state = WhiteboardState::new(self);
         let json = serde_json::to_string(&whiteboard_state).unwrap();
         let files = rfd::FileDialog::new()
             .add_filter("Whiteboard file", &["wb"])
@@ -96,7 +102,7 @@ impl WhiteboardApp {
             .set_file_name("Untitled.wb")
             .save_file();
         if let Some(file_path) = files {
-            if let Err(e) = std::fs::write(file_path, json) {
+            if let Err(e) = std::fs::write(&file_path, json) {
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("Failed to save whiteboard")
@@ -106,8 +112,43 @@ impl WhiteboardApp {
                     ))
                     .set_buttons(rfd::MessageButtons::Ok)
                     .show();
+            } else {
+                self.whiteboard_file = Some(file_path);
             }
         }
+    }
+    fn open_whiteboard_file(&mut self) -> io::Result<()> {
+        let files = rfd::FileDialog::new()
+            .add_filter("Whiteboard file", &["wb"])
+            .set_title("Select whiteboard file")
+            .pick_file();
+        if let Some(file_path) = files {
+            let json = std::fs::read_to_string(&file_path)?;
+            let state = serde_json::from_str::<WhiteboardState>(&json);
+            match state {
+                Ok(state) => {
+                    self.whiteboard_file = Some(file_path);
+                    self.palette = state
+                        .palette
+                        .iter()
+                        .map(|&color| color.into())
+                        .collect();
+                    self.lines = state.lines.iter().map(|l| l.into()).collect();
+                }
+                Err(_) => {
+                    rfd::MessageDialog::new()
+                        .set_level(rfd::MessageLevel::Error)
+                        .set_title("Invalid whiteboard file")
+                        .set_description(format!(
+                            "{} is not a whiteboard file",
+                            &file_path.to_string_lossy()
+                        ))
+                        .set_buttons(rfd::MessageButtons::Ok)
+                        .show();
+                }
+            }
+        }
+        Ok(())
     }
 }
 impl Default for WhiteboardApp {
@@ -116,7 +157,7 @@ impl Default for WhiteboardApp {
             lines: Vec::new(),
             current_line: Vec::new(),
             // 預設提供五種不同的顏色選項
-            palette: [
+            palette: vec![
                 Color32::WHITE,
                 Color32::RED,
                 Color32::YELLOW,
@@ -125,8 +166,9 @@ impl Default for WhiteboardApp {
             ],
             active_color_index: 0,
             stroke_width: 3.0,
-            current_tool: Tool::default(),
+            current_tool: Tool::Brush,
             undo_stack: UndoStack::default(),
+            whiteboard_file: None,
         }
     }
 }

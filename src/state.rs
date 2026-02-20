@@ -1,9 +1,9 @@
 use eframe::{emath::Pos2, epaint::Color32};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Line, WhiteboardApp};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Pos {
     x: f32,
     y: f32,
@@ -18,8 +18,19 @@ impl Into<Pos2> for Pos {
         Pos2::new(self.x, self.y)
     }
 }
-#[derive(Serialize)]
-struct Color(pub(crate) [u8; 4]);
+impl Into<Pos2> for &Pos {
+    fn into(self) -> Pos2 {
+        Pos2::new(self.x, self.y)
+    }
+}
+#[derive(Serialize, Deserialize, Copy, Clone)]
+pub(crate) struct Color(pub(crate) [u8; 4]);
+impl From<&Color32> for Color {
+    fn from(c: &Color32) -> Self {
+        Self([c[0], c[1], c[2], c[3]])
+    }
+}
+
 impl From<Color32> for Color {
     fn from(c: Color32) -> Self {
         Self([c[0], c[1], c[2], c[3]])
@@ -32,7 +43,7 @@ impl Into<Color32> for Color {
         )
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LineState {
     points: Vec<Pos>,
     color: Color,
@@ -47,18 +58,27 @@ impl From<&Line> for LineState {
         }
     }
 }
-#[derive(Serialize)]
-pub struct WhiteboardState {
-    lines: Vec<LineState>,
-    palette: Vec<Color>,
+impl Into<Line> for &LineState {
+    fn into(self) -> Line {
+        Line {
+            points: self.points.iter().map(|p| p.into()).collect(),
+            color: self.color.into(),
+            width: self.width,
+        }
+    }
 }
-impl From<&WhiteboardApp> for WhiteboardState {
-    fn from(app: &WhiteboardApp) -> Self {
+#[derive(Serialize, Deserialize)]
+pub struct WhiteboardState {
+    pub lines: Vec<LineState>,
+    pub(crate) palette: Vec<Color>,
+}
+impl WhiteboardState {
+    pub fn new(app: &WhiteboardApp) -> Self {
         Self {
             lines: app.lines.iter().map(|line| line.into()).collect(),
             palette: app
                 .palette
-                .into_iter()
+                .iter()
                 .map(|color| Color::from(color))
                 .collect(),
         }
