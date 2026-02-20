@@ -7,7 +7,6 @@ use std::{io, path::PathBuf};
 use directories::UserDirs;
 use eframe::{egui, epaint::StrokeKind};
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
-use serde::Serialize;
 
 use crate::{
     state::WhiteboardState,
@@ -34,7 +33,18 @@ pub struct WhiteboardApp {
 }
 
 impl WhiteboardApp {
+    fn set_window_title(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "Simple Whiteboard - {}",
+            self.whiteboard_file
+                .as_ref()
+                .map(|s| s.display().to_string())
+                .unwrap_or("Untitled.wb".to_owned())
+        )));
+    }
     fn handle_keyboard_event(&mut self, ctx: &egui::Context) {
+        let mut should_save = false;
+        let mut should_open = false;
         ctx.input(|i| {
             for event in &i.events {
                 if let egui::Event::Key {
@@ -58,10 +68,10 @@ impl WhiteboardApp {
                             self.current_tool = Tool::Eraser;
                         }
                         egui::Key::S if modifiers.command => {
-                            self.save_whiteboard()
+                            should_save = true;
                         }
                         egui::Key::O if modifiers.command => {
-                            self.open_whiteboard_file();
+                            should_open = true;
                         }
                         egui::Key::Num1 => self.active_color_index = 0,
                         egui::Key::Num2 => self.active_color_index = 1,
@@ -72,7 +82,23 @@ impl WhiteboardApp {
                     }
                 }
             }
-        })
+        });
+        if should_open {
+            if let Err(e) = self.open_whiteboard_file() {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Failed to read")
+                    .set_description(format!("Failed to read: {}", e))
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            } else {
+                self.set_window_title(ctx);
+            }
+        }
+        if should_save {
+            self.save_whiteboard();
+            self.set_window_title(ctx);
+        }
     }
     fn undo(&mut self) {
         match self.undo_stack.pop() {
@@ -87,6 +113,20 @@ impl WhiteboardApp {
             },
         }
     }
+    fn write_whiteboard(&mut self, file_path: PathBuf, json: String) {
+        if let Err(e) = std::fs::write(&file_path, json) {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Failed to save whiteboard")
+                .set_description(format!("Failed to save whiteboard: {}", e))
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            return;
+        }
+        if self.whiteboard_file.is_none() {
+            self.whiteboard_file = Some(file_path);
+        }
+    }
     fn save_whiteboard(&mut self) {
         let default_path = UserDirs::new()
             .and_then(|user_dirs| {
@@ -95,25 +135,17 @@ impl WhiteboardApp {
             .unwrap_or(std::env::current_dir().unwrap_or_default());
         let whiteboard_state = WhiteboardState::new(self);
         let json = serde_json::to_string(&whiteboard_state).unwrap();
-        let files = rfd::FileDialog::new()
-            .add_filter("Whiteboard file", &["wb"])
-            .add_filter("All files", &["*"])
-            .set_directory(default_path)
-            .set_file_name("Untitled.wb")
-            .save_file();
-        if let Some(file_path) = files {
-            if let Err(e) = std::fs::write(&file_path, json) {
-                rfd::MessageDialog::new()
-                    .set_level(rfd::MessageLevel::Error)
-                    .set_title("Failed to save whiteboard")
-                    .set_description(format!(
-                        "Failed to save whiteboard: {}",
-                        e
-                    ))
-                    .set_buttons(rfd::MessageButtons::Ok)
-                    .show();
-            } else {
-                self.whiteboard_file = Some(file_path);
+        if let Some(file_path) = self.whiteboard_file.clone() {
+            self.write_whiteboard(file_path, json);
+        } else {
+            let files = rfd::FileDialog::new()
+                .add_filter("Whiteboard file", &["wb"])
+                .add_filter("All files", &["*"])
+                .set_directory(default_path)
+                .set_file_name("Untitled.wb")
+                .save_file();
+            if let Some(file_path) = files {
+                self.write_whiteboard(file_path, json);
             }
         }
     }
@@ -212,10 +244,7 @@ impl eframe::App for WhiteboardApp {
 
                     let frame = if is_selected {
                         egui::Frame::new()
-                            .stroke(egui::Stroke::new(
-                                2.0,
-                                ui.visuals().text_color(),
-                            ))
+                            .stroke(Stroke::new(2.0, ui.visuals().text_color()))
                             .inner_margin(2.0)
                             .corner_radius(4.0)
                     } else {
@@ -249,7 +278,7 @@ impl eframe::App for WhiteboardApp {
 
                         let frame = if is_selected {
                             egui::Frame::new()
-                                .stroke(egui::Stroke::new(
+                                .stroke(Stroke::new(
                                     2.0,
                                     ui.visuals().text_color(),
                                 ))
@@ -265,7 +294,7 @@ impl eframe::App for WhiteboardApp {
                                     &mut self.palette[i],
                                 );
                             } else {
-                                let size = egui::vec2(
+                                let size = vec2(
                                     ui.spacing().interact_size.y,
                                     ui.spacing().interact_size.y,
                                 );
@@ -284,7 +313,7 @@ impl eframe::App for WhiteboardApp {
                                     ui.painter().rect_stroke(
                                         rect,
                                         rounding,
-                                        egui::Stroke::new(
+                                        Stroke::new(
                                             1.0,
                                             ui.visuals()
                                                 .widgets

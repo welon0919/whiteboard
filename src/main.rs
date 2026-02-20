@@ -1,7 +1,10 @@
 use egui::{Style, Visuals};
 use whiteboard::WhiteboardApp;
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_maximized(true),
+        ..Default::default()
+    };
     eframe::run_native(
         "Simple Whiteboard",
         native_options,
