@@ -1,14 +1,19 @@
+mod state;
 mod tools;
 mod undo;
 
+use directories::UserDirs;
 use eframe::{egui, epaint::StrokeKind};
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
+use serde::Serialize;
 
 use crate::{
+    state::WhiteboardState,
     tools::Tool,
     undo::{UndoAction, UndoStack},
 };
 
+#[derive(Debug, Clone)]
 struct Line {
     points: Vec<Pos2>,
     color: Color32,
@@ -49,6 +54,9 @@ impl WhiteboardApp {
                         egui::Key::E if !modifiers.command => {
                             self.current_tool = Tool::Eraser;
                         }
+                        egui::Key::S if modifiers.command => {
+                            self.save_whiteboard()
+                        }
                         egui::Key::Num1 => self.active_color_index = 0,
                         egui::Key::Num2 => self.active_color_index = 1,
                         egui::Key::Num3 => self.active_color_index = 2,
@@ -71,6 +79,34 @@ impl WhiteboardApp {
                     self.lines.pop();
                 }
             },
+        }
+    }
+    fn save_whiteboard(&self) {
+        let default_path = UserDirs::new()
+            .and_then(|user_dirs| {
+                user_dirs.download_dir().map(|p| p.to_path_buf())
+            })
+            .unwrap_or(std::env::current_dir().unwrap_or_default());
+        let whiteboard_state = WhiteboardState::from(self);
+        let json = serde_json::to_string(&whiteboard_state).unwrap();
+        let files = rfd::FileDialog::new()
+            .add_filter("Whiteboard file", &["wb"])
+            .add_filter("All files", &["*"])
+            .set_directory(default_path)
+            .set_file_name("Untitled.wb")
+            .save_file();
+        if let Some(file_path) = files {
+            if let Err(e) = std::fs::write(file_path, json) {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Failed to save whiteboard")
+                    .set_description(format!(
+                        "Failed to save whiteboard: {}",
+                        e
+                    ))
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            }
         }
     }
 }

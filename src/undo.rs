@@ -3,6 +3,7 @@ const MAX_UNDO_STACK_SIZE: usize = 100;
 
 use crate::Line;
 
+#[derive(Debug, Clone)]
 pub enum UndoAction {
     Erase(Line),
     Draw(Line),
