@@ -5,4 +5,5 @@ pub enum Tool {
     #[default]
     Brush,
     Eraser,
+    Selection,
 }

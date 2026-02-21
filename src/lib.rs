@@ -3,11 +3,11 @@ mod state;
 mod tools;
 mod undo;
 
-use std::{io, path::PathBuf};
+use std::{collections::HashSet, io, path::PathBuf};
 
 use directories::UserDirs;
 use eframe::egui;
-use egui::{Color32, Pos2, Stroke, pos2, vec2};
+use egui::{Color32, Pos2, Rect, Stroke, pos2, vec2};
 
 use crate::{
     colors::ColorPalette,
@@ -31,6 +31,13 @@ pub struct WhiteboardApp {
     current_tool: Tool,
     undo_stack: UndoStack,
     whiteboard_file: Option<PathBuf>,
+
+    // Selection tool state
+    selection_start: Option<Pos2>,
+    selection_current: Option<Pos2>,
+    selected_lines: HashSet<usize>,
+    is_moving_selection: bool,
+    last_mouse_pos: Option<Pos2>,
 }
 
 impl WhiteboardApp {
@@ -61,6 +68,7 @@ impl WhiteboardApp {
                         }
                         egui::Key::C if !modifiers.command => {
                             self.lines.clear();
+                            self.selected_lines.clear();
                         }
                         egui::Key::B if !modifiers.command => {
                             self.current_tool = Tool::Brush;
@@ -89,6 +97,37 @@ impl WhiteboardApp {
                         egui::Key::Num5 => {
                             self.palette.set_active_color_index(4)
                         }
+                        egui::Key::Delete => {
+                            if !self.selected_lines.is_empty() {
+                                let mut indices: Vec<_> = self
+                                    .selected_lines
+                                    .iter()
+                                    .copied()
+                                    .collect();
+                                indices.sort_unstable_by(|a, b| b.cmp(a)); // sort descending
+
+                                let mut deleted_lines = Vec::new();
+                                for index in indices {
+                                    if index < self.lines.len() {
+                                        deleted_lines
+                                            .push(self.lines.remove(index));
+                                    }
+                                }
+                                // Reverse to maintain original order for undo if needed,
+                                // though simple push is fine.
+                                // For undo, we need to add them back.
+                                // Since we remove by index descending, the last removed was the first in original list.
+                                // We can just add them to undo stack as Erase action.
+                                self.undo_stack.extend_erase(deleted_lines);
+                                self.selected_lines.clear();
+                            }
+                        }
+                        egui::Key::Escape => {
+                            self.selected_lines.clear();
+                            self.selection_start = None;
+                            self.selection_current = None;
+                            self.is_moving_selection = false;
+                        }
                         _ => {}
                     }
                 }
@@ -112,6 +151,7 @@ impl WhiteboardApp {
         }
     }
     fn undo(&mut self) {
+        self.selected_lines.clear();
         match self.undo_stack.pop() {
             None => {}
             Some(action) => match action {
@@ -206,6 +246,12 @@ impl Default for WhiteboardApp {
             current_tool: Tool::Brush,
             undo_stack: UndoStack::default(),
             whiteboard_file: None,
+
+            selection_start: None,
+            selection_current: None,
+            selected_lines: HashSet::new(),
+            is_moving_selection: false,
+            last_mouse_pos: None,
         }
     }
 }
@@ -241,6 +287,11 @@ impl eframe::App for WhiteboardApp {
                         Tool::Eraser,
                         egui::include_image!("../assets/tools/eraser.png"),
                         "eraser",
+                    ),
+                    (
+                        Tool::Selection,
+                        egui::include_image!("../assets/tools/select.png"),
+                        "Selection Tool",
                     ),
                 ];
 
@@ -329,7 +380,84 @@ impl eframe::App for WhiteboardApp {
 
                             self.lines = kept;
                             let deleted_lines = deleted;
-                            self.undo_stack.extend_erase(deleted_lines);
+                            if !deleted_lines.is_empty() {
+                                self.selected_lines.clear();
+                                self.undo_stack.extend_erase(deleted_lines);
+                            }
+                        }
+                    }
+                    Tool::Selection => {
+                        // Check if we are interacting with existing selection
+                        let mut bounding_box = Rect::NOTHING;
+                        if !self.selected_lines.is_empty() {
+                            for (i, line) in self.lines.iter().enumerate() {
+                                if self.selected_lines.contains(&i) {
+                                    for p in &line.points {
+                                        bounding_box.extend_with(*p);
+                                    }
+                                }
+                            }
+                        }
+
+                        if response.drag_started() {
+                            if bounding_box.contains(pointer_pos)
+                                && !self.selected_lines.is_empty()
+                            {
+                                self.is_moving_selection = true;
+                                self.last_mouse_pos = Some(pointer_pos);
+                            } else {
+                                self.selected_lines.clear();
+                                self.selection_start = Some(pointer_pos);
+                                self.selection_current = Some(pointer_pos);
+                            }
+                        } else if response.dragged() {
+                            if self.is_moving_selection {
+                                if let Some(last_pos) = self.last_mouse_pos {
+                                    let delta = pointer_pos - last_pos;
+                                    for i in &self.selected_lines {
+                                        if let Some(line) =
+                                            self.lines.get_mut(*i)
+                                        {
+                                            for p in &mut line.points {
+                                                *p += delta;
+                                            }
+                                        }
+                                    }
+                                    self.last_mouse_pos = Some(pointer_pos);
+                                }
+                            } else if let Some(_) = self.selection_start {
+                                self.selection_current = Some(pointer_pos);
+                            }
+                        } else if response.drag_stopped() {
+                            if self.is_moving_selection {
+                                self.is_moving_selection = false;
+                                self.last_mouse_pos = None;
+                            } else if let (Some(start), Some(current)) =
+                                (self.selection_start, self.selection_current)
+                            {
+                                let rect = Rect::from_two_pos(start, current);
+                                self.selected_lines.clear();
+                                for (i, line) in self.lines.iter().enumerate() {
+                                    // Check if line is inside rect
+                                    // Simple check: if bounding box intersects
+                                    let mut line_bbox = Rect::NOTHING;
+                                    for p in &line.points {
+                                        line_bbox.extend_with(*p);
+                                    }
+                                    if rect.intersects(line_bbox) {
+                                        // More precise check: at least one point inside?
+                                        // Or just keep intersection. Intersection is usually good enough for "Select Area".
+                                        self.selected_lines.insert(i);
+                                    }
+                                }
+                                self.selection_start = None;
+                                self.selection_current = None;
+                            }
+                        } else if response.clicked() {
+                            // Click outside selection to clear
+                            if !bounding_box.contains(pointer_pos) {
+                                self.selected_lines.clear();
+                            }
                         }
                     }
                 }
@@ -353,13 +481,59 @@ impl eframe::App for WhiteboardApp {
             }
 
             // 繪製所有已存檔的線條
-            for line in &self.lines {
+            for (i, line) in self.lines.iter().enumerate() {
                 if line.points.len() >= 2 {
                     let points = line.points.clone();
+                    let color = if self.selected_lines.contains(&i) {
+                        // Highlight selected lines? Or just leave them as is and draw box?
+                        // Maybe slight tint?
+                        // For now, let's just keep original color, but maybe we can draw a highlight.
+                        line.color
+                    } else {
+                        line.color
+                    };
+
                     painter.add(egui::Shape::line(
                         points,
-                        Stroke::new(line.width, line.color),
+                        Stroke::new(line.width, color),
                     ));
+                }
+            }
+
+            // Draw selection rect (drag area)
+            if let (Some(start), Some(current)) =
+                (self.selection_start, self.selection_current)
+            {
+                if self.current_tool == Tool::Selection {
+                    let rect = Rect::from_two_pos(start, current);
+                    draw_dotted_rect(
+                        &painter,
+                        rect,
+                        Stroke::new(1.0, Color32::GRAY),
+                    );
+                }
+            }
+
+            // Draw bounding box around selected lines
+            if !self.selected_lines.is_empty()
+                && self.current_tool == Tool::Selection
+            {
+                let mut bbox = Rect::NOTHING;
+                for i in &self.selected_lines {
+                    if let Some(line) = self.lines.get(*i) {
+                        for p in &line.points {
+                            bbox.extend_with(*p);
+                        }
+                    }
+                }
+                if bbox != Rect::NOTHING {
+                    // Add some padding
+                    let expanded = bbox.expand(5.0);
+                    draw_dotted_rect(
+                        &painter,
+                        expanded,
+                        Stroke::new(1.0, Color32::BLUE),
+                    );
                 }
             }
 
@@ -376,4 +550,17 @@ impl eframe::App for WhiteboardApp {
             }
         });
     }
+}
+
+fn draw_dotted_rect(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let dash_len = 5.0;
+    let gap_len = 5.0;
+    let points = vec![
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    painter.add(egui::Shape::dashed_line(&points, stroke, dash_len, gap_len));
 }
