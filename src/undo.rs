@@ -8,23 +8,11 @@ pub enum UndoAction {
     Erase(Line),
     Draw(Line),
 }
+#[derive(Default)]
 pub struct UndoStack {
     stack: VecDeque<UndoAction>,
 }
-impl Default for UndoStack {
-    fn default() -> Self {
-        Self {
-            stack: VecDeque::new(),
-        }
-    }
-}
 impl UndoStack {
-    pub fn add_erase(&mut self, line: Line) {
-        self.stack.push_back(UndoAction::Erase(line));
-        if self.stack.len() > MAX_UNDO_STACK_SIZE {
-            self.stack.pop_front();
-        }
-    }
     pub fn add_draw(&mut self, line: Line) {
         self.stack.push_back(UndoAction::Draw(line));
         if self.stack.len() > MAX_UNDO_STACK_SIZE {

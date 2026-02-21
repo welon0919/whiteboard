@@ -13,14 +13,14 @@ impl From<&Pos2> for Pos {
         Self { x: pos.x, y: pos.y }
     }
 }
-impl Into<Pos2> for Pos {
-    fn into(self) -> Pos2 {
-        Pos2::new(self.x, self.y)
+impl From<Pos> for Pos2 {
+    fn from(pos: Pos) -> Pos2 {
+        Pos2::new(pos.x, pos.y)
     }
 }
-impl Into<Pos2> for &Pos {
-    fn into(self) -> Pos2 {
-        Pos2::new(self.x, self.y)
+impl From<&Pos> for Pos2 {
+    fn from(pos: &Pos) -> Self {
+        Pos2::new(pos.x, pos.y)
     }
 }
 #[derive(Serialize, Deserialize, Copy, Clone)]
@@ -36,10 +36,10 @@ impl From<Color32> for Color {
         Self([c[0], c[1], c[2], c[3]])
     }
 }
-impl Into<Color32> for Color {
-    fn into(self) -> Color32 {
+impl From<Color> for Color32 {
+    fn from(color: Color) -> Self {
         Color32::from_rgba_unmultiplied(
-            self.0[0], self.0[1], self.0[2], self.0[3],
+            color.0[0], color.0[1], color.0[2], color.0[3],
         )
     }
 }
@@ -52,18 +52,18 @@ pub struct LineState {
 impl From<&Line> for LineState {
     fn from(line: &Line) -> Self {
         Self {
-            points: line.points.iter().map(|p| p.into()).collect(),
+            points: line.points.iter().map(Into::into).collect(),
             color: line.color.into(),
             width: line.width,
         }
     }
 }
-impl Into<Line> for &LineState {
-    fn into(self) -> Line {
+impl From<&LineState> for Line {
+    fn from(state: &LineState) -> Self {
         Line {
-            points: self.points.iter().map(|p| p.into()).collect(),
-            color: self.color.into(),
-            width: self.width,
+            points: state.points.iter().map(Into::into).collect(),
+            color: state.color.into(),
+            width: state.width,
         }
     }
 }
@@ -75,12 +75,12 @@ pub struct WhiteboardState {
 impl WhiteboardState {
     pub fn new(app: &WhiteboardApp) -> Self {
         Self {
-            lines: app.lines.iter().map(|line| line.into()).collect(),
+            lines: app.lines.iter().map(Into::into).collect(),
             palette: app
                 .palette
                 .get_palette_vec()
                 .iter()
-                .map(|color| Color::from(color))
+                .map(Color::from)
                 .collect(),
         }
     }

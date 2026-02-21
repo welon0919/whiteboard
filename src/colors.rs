@@ -30,7 +30,6 @@ impl ColorPalette {
                 // draw color palette
                 for i in 0..self.colors.len() {
                     let is_selected = i == self.active_color_index;
-                    let is_add_btn = i == self.colors.len();
 
                     let frame = if is_selected {
                         egui::Frame::new()
