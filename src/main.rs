@@ -1,8 +1,19 @@
-use egui::{Style, Visuals};
+use std::fs;
+
+use eframe::icon_data::from_png_bytes;
+use egui::{IconData, Style, Visuals};
 use whiteboard::WhiteboardApp;
+const ICON_PATH: &'static str = "assets/icon.png";
+fn load_icon(path: &str) -> Result<IconData, String> {
+    let png_bytes = fs::read(path).map_err(|err| err.to_string())?;
+    from_png_bytes(&png_bytes).map_err(|err| err.to_string())
+}
 fn main() -> eframe::Result<()> {
+    let icon = load_icon(ICON_PATH).expect("Failed to load icon");
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_maximized(true),
+        viewport: egui::ViewportBuilder::default()
+            .with_maximized(true)
+            .with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(
