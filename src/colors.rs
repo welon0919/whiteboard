@@ -133,7 +133,9 @@ impl ColorPalette {
         }
     }
     pub fn set_active_color_index(&mut self, active_color_index: usize) {
-        self.active_color_index = active_color_index;
+        if active_color_index < self.colors.len() {
+            self.active_color_index = active_color_index;
+        }
     }
     pub fn get_current_color(&self) -> Color32 {
         self.colors[self.active_color_index]

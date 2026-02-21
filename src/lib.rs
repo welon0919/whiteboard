@@ -97,6 +97,18 @@ impl WhiteboardApp {
                         egui::Key::Num5 => {
                             self.palette.set_active_color_index(4)
                         }
+                        egui::Key::Num6 => {
+                            self.palette.set_active_color_index(5)
+                        }
+                        egui::Key::Num7 => {
+                            self.palette.set_active_color_index(6)
+                        }
+                        egui::Key::Num8 => {
+                            self.palette.set_active_color_index(7)
+                        }
+                        egui::Key::Num9 => {
+                            self.palette.set_active_color_index(8)
+                        }
                         egui::Key::Delete => {
                             if !self.selected_lines.is_empty() {
                                 let mut indices: Vec<_> = self
