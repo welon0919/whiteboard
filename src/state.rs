@@ -78,6 +78,7 @@ impl WhiteboardState {
             lines: app.lines.iter().map(|line| line.into()).collect(),
             palette: app
                 .palette
+                .get_palette_vec()
                 .iter()
                 .map(|color| Color::from(color))
                 .collect(),

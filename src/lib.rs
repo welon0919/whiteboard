@@ -1,3 +1,4 @@
+mod colors;
 mod state;
 mod tools;
 mod undo;
@@ -5,10 +6,11 @@ mod undo;
 use std::{io, path::PathBuf};
 
 use directories::UserDirs;
-use eframe::{egui, epaint::StrokeKind};
+use eframe::egui;
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
 
 use crate::{
+    colors::ColorPalette,
     state::WhiteboardState,
     tools::Tool,
     undo::{UndoAction, UndoStack},
@@ -24,8 +26,7 @@ struct Line {
 pub struct WhiteboardApp {
     lines: Vec<Line>,
     current_line: Vec<Pos2>,
-    palette: Vec<Color32>,
-    active_color_index: usize,
+    palette: ColorPalette,
     stroke_width: f32,
     current_tool: Tool,
     undo_stack: UndoStack,
@@ -73,11 +74,21 @@ impl WhiteboardApp {
                         egui::Key::O if modifiers.command => {
                             should_open = true;
                         }
-                        egui::Key::Num1 => self.active_color_index = 0,
-                        egui::Key::Num2 => self.active_color_index = 1,
-                        egui::Key::Num3 => self.active_color_index = 2,
-                        egui::Key::Num4 => self.active_color_index = 3,
-                        egui::Key::Num5 => self.active_color_index = 4,
+                        egui::Key::Num1 => {
+                            self.palette.set_active_color_index(0)
+                        }
+                        egui::Key::Num2 => {
+                            self.palette.set_active_color_index(1)
+                        }
+                        egui::Key::Num3 => {
+                            self.palette.set_active_color_index(2)
+                        }
+                        egui::Key::Num4 => {
+                            self.palette.set_active_color_index(3)
+                        }
+                        egui::Key::Num5 => {
+                            self.palette.set_active_color_index(4)
+                        }
                         _ => {}
                     }
                 }
@@ -164,7 +175,8 @@ impl WhiteboardApp {
                         .palette
                         .iter()
                         .map(|&color| color.into())
-                        .collect();
+                        .collect::<Vec<_>>()
+                        .into();
                     self.lines = state.lines.iter().map(|l| l.into()).collect();
                 }
                 Err(_) => {
@@ -189,14 +201,7 @@ impl Default for WhiteboardApp {
             lines: Vec::new(),
             current_line: Vec::new(),
             // 預設提供五種不同的顏色選項
-            palette: vec![
-                Color32::WHITE,
-                Color32::RED,
-                Color32::YELLOW,
-                Color32::GREEN,
-                Color32::BLUE,
-            ],
-            active_color_index: 0,
+            palette: ColorPalette::default(),
             stroke_width: 3.0,
             current_tool: Tool::Brush,
             undo_stack: UndoStack::default(),
@@ -224,7 +229,7 @@ impl eframe::App for WhiteboardApp {
             ui.heading("toolbar");
             ui.add_space(5.0);
 
-            // 工具切換區塊
+            // Tool selection
             ui.horizontal(|ui| {
                 let tools = [
                     (
@@ -269,69 +274,9 @@ impl eframe::App for WhiteboardApp {
             ui.separator();
             ui.add_space(15.0);
 
-            // 當使用畫筆時才允許調整顏色
+            // color selection (only when brush is selected)
             ui.add_enabled_ui(self.current_tool == Tool::Brush, |ui| {
-                ui.label("Color selection");
-                ui.horizontal(|ui| {
-                    for i in 0..5 {
-                        let is_selected = i == self.active_color_index;
-
-                        let frame = if is_selected {
-                            egui::Frame::new()
-                                .stroke(Stroke::new(
-                                    2.0,
-                                    ui.visuals().text_color(),
-                                ))
-                                .inner_margin(2.0)
-                                .corner_radius(4.0)
-                        } else {
-                            egui::Frame::new().inner_margin(4.0)
-                        };
-
-                        frame.show(ui, |ui| {
-                            if is_selected {
-                                ui.color_edit_button_srgba(
-                                    &mut self.palette[i],
-                                );
-                            } else {
-                                let size = vec2(
-                                    ui.spacing().interact_size.y,
-                                    ui.spacing().interact_size.y,
-                                );
-                                let (rect, response) = ui.allocate_exact_size(
-                                    size,
-                                    egui::Sense::click(),
-                                );
-
-                                if ui.is_rect_visible(rect) {
-                                    let rounding = 2.0;
-                                    ui.painter().rect_filled(
-                                        rect,
-                                        rounding,
-                                        self.palette[i],
-                                    );
-                                    ui.painter().rect_stroke(
-                                        rect,
-                                        rounding,
-                                        Stroke::new(
-                                            1.0,
-                                            ui.visuals()
-                                                .widgets
-                                                .inactive
-                                                .bg_stroke
-                                                .color,
-                                        ),
-                                        StrokeKind::Outside,
-                                    );
-                                }
-
-                                if response.clicked() {
-                                    self.active_color_index = i;
-                                }
-                            }
-                        });
-                    }
-                });
+                self.palette.draw(ui)
             });
 
             ui.add_space(10.0);
@@ -395,12 +340,12 @@ impl eframe::App for WhiteboardApp {
                 if !self.current_line.is_empty() {
                     self.lines.push(Line {
                         points: self.current_line.clone(),
-                        color: self.palette[self.active_color_index],
+                        color: self.palette.get_current_color(),
                         width: self.stroke_width,
                     });
                     self.undo_stack.add_draw(Line {
                         points: self.current_line.clone(),
-                        color: self.palette[self.active_color_index],
+                        color: self.palette.get_current_color(),
                         width: self.stroke_width,
                     });
                     self.current_line.clear();
@@ -425,7 +370,7 @@ impl eframe::App for WhiteboardApp {
                     self.current_line.clone(),
                     Stroke::new(
                         self.stroke_width,
-                        self.palette[self.active_color_index],
+                        self.palette.get_current_color(),
                     ),
                 ));
             }
