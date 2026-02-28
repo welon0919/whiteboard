@@ -27,6 +27,14 @@ struct Line {
     width: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResizeCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 pub struct WhiteboardApp {
     lines: Vec<Line>,
     current_line: Vec<Pos2>,
@@ -42,6 +50,9 @@ pub struct WhiteboardApp {
     selected_lines: HashSet<usize>,
     is_moving_selection: bool,
     last_mouse_pos: Option<Pos2>,
+    resizing_corner: Option<ResizeCorner>,
+    resize_original_bbox: Option<Rect>,
+    resize_original_lines: Vec<(usize, Line)>,
 }
 
 impl WhiteboardApp {
@@ -78,6 +89,18 @@ impl WhiteboardApp {
                         }
                         egui::Key::E if !modifiers.command => {
                             self.current_tool = Tool::Eraser;
+                        }
+                        egui::Key::S if !modifiers.command => {
+                            if self.current_tool != Tool::Selection {
+                                self.selected_lines.clear();
+                                self.selection_start = None;
+                                self.selection_current = None;
+                                self.is_moving_selection = false;
+                                self.resizing_corner = None;
+                                self.resize_original_bbox = None;
+                                self.resize_original_lines.clear();
+                                self.current_tool = Tool::Selection;
+                            }
                         }
                         egui::Key::S if modifiers.command => {
                             should_save = true;
@@ -142,6 +165,9 @@ impl WhiteboardApp {
                             self.selection_start = None;
                             self.selection_current = None;
                             self.is_moving_selection = false;
+                            self.resizing_corner = None;
+                            self.resize_original_bbox = None;
+                            self.resize_original_lines.clear();
                         }
                         _ => {}
                     }
@@ -252,19 +278,39 @@ impl WhiteboardApp {
     fn handle_selection(&mut self, response: &Response, pointer_pos: Pos2) {
         {
             // Check if we are interacting with existing selection
-            let mut bounding_box = Rect::NOTHING;
-            if !self.selected_lines.is_empty() {
-                for (i, line) in self.lines.iter().enumerate() {
-                    if self.selected_lines.contains(&i) {
-                        for p in &line.points {
-                            bounding_box.extend_with(*p);
-                        }
-                    }
-                }
-            }
+            let selection_info = self.get_selection_info();
+            let (bounding_box, expanded_bbox, corners) = match selection_info {
+                Some(info) => info,
+                None => (Rect::NOTHING, Rect::NOTHING, [Pos2::ZERO; 4]),
+            };
+
+            let corner_size = vec2(10.0, 10.0);
+            let tl_rect = Rect::from_center_size(corners[0], corner_size);
+            let tr_rect = Rect::from_center_size(corners[1], corner_size);
+            let bl_rect = Rect::from_center_size(corners[2], corner_size);
+            let br_rect = Rect::from_center_size(corners[3], corner_size);
 
             if response.drag_started() {
-                if bounding_box.contains(pointer_pos)
+                if !self.selected_lines.is_empty()
+                    && tl_rect.contains(pointer_pos)
+                {
+                    self.start_resizing(ResizeCorner::TopLeft, bounding_box);
+                } else if !self.selected_lines.is_empty()
+                    && tr_rect.contains(pointer_pos)
+                {
+                    self.start_resizing(ResizeCorner::TopRight, bounding_box);
+                } else if !self.selected_lines.is_empty()
+                    && bl_rect.contains(pointer_pos)
+                {
+                    self.start_resizing(ResizeCorner::BottomLeft, bounding_box);
+                } else if !self.selected_lines.is_empty()
+                    && br_rect.contains(pointer_pos)
+                {
+                    self.start_resizing(
+                        ResizeCorner::BottomRight,
+                        bounding_box,
+                    );
+                } else if expanded_bbox.contains(pointer_pos)
                     && !self.selected_lines.is_empty()
                 {
                     self.is_moving_selection = true;
@@ -275,7 +321,9 @@ impl WhiteboardApp {
                     self.selection_current = Some(pointer_pos);
                 }
             } else if response.dragged() {
-                if self.is_moving_selection {
+                if let Some(corner) = self.resizing_corner {
+                    self.update_resizing(pointer_pos, corner);
+                } else if self.is_moving_selection {
                     if let Some(last_pos) = self.last_mouse_pos {
                         let delta = pointer_pos - last_pos;
                         for i in &self.selected_lines {
@@ -291,7 +339,11 @@ impl WhiteboardApp {
                     self.selection_current = Some(pointer_pos);
                 }
             } else if response.drag_stopped() {
-                if self.is_moving_selection {
+                if self.resizing_corner.is_some() {
+                    self.resizing_corner = None;
+                    self.resize_original_bbox = None;
+                    self.resize_original_lines.clear();
+                } else if self.is_moving_selection {
                     self.is_moving_selection = false;
                     self.last_mouse_pos = None;
                 } else if let (Some(start), Some(current)) =
@@ -317,8 +369,143 @@ impl WhiteboardApp {
                 }
             } else if response.clicked() {
                 // Click outside selection to clear
-                if !bounding_box.contains(pointer_pos) {
+                if !expanded_bbox.contains(pointer_pos) {
                     self.selected_lines.clear();
+                }
+            }
+        }
+    }
+
+    fn get_selection_info(&self) -> Option<(Rect, Rect, [Pos2; 4])> {
+        if self.selected_lines.is_empty() {
+            return None;
+        }
+
+        let mut bounding_box = Rect::NOTHING;
+        for &i in &self.selected_lines {
+            if let Some(line) = self.lines.get(i) {
+                for p in &line.points {
+                    bounding_box.extend_with(*p);
+                }
+            }
+        }
+
+        if bounding_box == Rect::NOTHING {
+            return None;
+        }
+
+        let expanded_bbox = bounding_box.expand(5.0);
+        let corners = [
+            expanded_bbox.left_top(),
+            expanded_bbox.right_top(),
+            expanded_bbox.left_bottom(),
+            expanded_bbox.right_bottom(),
+        ];
+
+        Some((bounding_box, expanded_bbox, corners))
+    }
+
+    fn update_cursor(&self, ctx: &egui::Context, response: &Response) {
+        if self.current_tool != Tool::Selection {
+            return;
+        }
+
+        // Handle cursor during interaction
+        if let Some(corner) = self.resizing_corner {
+            match corner {
+                ResizeCorner::TopLeft | ResizeCorner::BottomRight => {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                }
+                ResizeCorner::TopRight | ResizeCorner::BottomLeft => {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNeSw);
+                }
+            }
+            return;
+        }
+
+        if self.is_moving_selection {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            return;
+        }
+
+        // Handle cursor during hover
+        if let Some(pointer_pos) = response.hover_pos() {
+            if let Some((_, expanded_bbox, corners)) = self.get_selection_info()
+            {
+                let hit_size = vec2(10.0, 10.0);
+                let tl_rect = Rect::from_center_size(corners[0], hit_size);
+                let tr_rect = Rect::from_center_size(corners[1], hit_size);
+                let bl_rect = Rect::from_center_size(corners[2], hit_size);
+                let br_rect = Rect::from_center_size(corners[3], hit_size);
+
+                if tl_rect.contains(pointer_pos)
+                    || br_rect.contains(pointer_pos)
+                {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                } else if tr_rect.contains(pointer_pos)
+                    || bl_rect.contains(pointer_pos)
+                {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNeSw);
+                } else if expanded_bbox.contains(pointer_pos) {
+                    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+        }
+    }
+
+    fn start_resizing(&mut self, corner: ResizeCorner, bbox: Rect) {
+        self.resizing_corner = Some(corner);
+        self.resize_original_bbox = Some(bbox);
+        self.resize_original_lines.clear();
+        for &i in &self.selected_lines {
+            if let Some(line) = self.lines.get(i) {
+                self.resize_original_lines.push((i, line.clone()));
+            }
+        }
+    }
+
+    fn update_resizing(&mut self, pointer_pos: Pos2, corner: ResizeCorner) {
+        if let Some(orig_bbox) = self.resize_original_bbox {
+            let mut new_bbox = orig_bbox;
+            match corner {
+                ResizeCorner::TopLeft => {
+                    new_bbox.min = pointer_pos + vec2(5.0, 5.0);
+                }
+                ResizeCorner::TopRight => {
+                    new_bbox.max.x = pointer_pos.x - 5.0;
+                    new_bbox.min.y = pointer_pos.y + 5.0;
+                }
+                ResizeCorner::BottomLeft => {
+                    new_bbox.min.x = pointer_pos.x + 5.0;
+                    new_bbox.max.y = pointer_pos.y - 5.0;
+                }
+                ResizeCorner::BottomRight => {
+                    new_bbox.max = pointer_pos - vec2(5.0, 5.0);
+                }
+            }
+
+            let scale_x = if orig_bbox.width() > 0.0 {
+                new_bbox.width() / orig_bbox.width()
+            } else {
+                1.0
+            };
+            let scale_y = if orig_bbox.height() > 0.0 {
+                new_bbox.height() / orig_bbox.height()
+            } else {
+                1.0
+            };
+
+            for (i, orig_line) in &self.resize_original_lines {
+                if let Some(line) = self.lines.get_mut(*i) {
+                    for (p, orig_p) in
+                        line.points.iter_mut().zip(&orig_line.points)
+                    {
+                        let nx = new_bbox.min.x
+                            + (orig_p.x - orig_bbox.min.x) * scale_x;
+                        let ny = new_bbox.min.y
+                            + (orig_p.y - orig_bbox.min.y) * scale_y;
+                        *p = pos2(nx, ny);
+                    }
                 }
             }
         }
@@ -381,7 +568,7 @@ impl WhiteboardApp {
         }
     }
 
-    fn draw_selections(&mut self, painter: &Painter) {
+    fn draw_selections(&self, painter: &Painter) {
         // Draw selection rect (drag area)
         if let (Some(start), Some(current)) =
             (self.selection_start, self.selection_current)
@@ -392,25 +579,25 @@ impl WhiteboardApp {
         }
 
         // Draw bounding box around selected lines
-        if !self.selected_lines.is_empty()
-            && self.current_tool == Tool::Selection
-        {
-            let mut bbox = Rect::NOTHING;
-            for i in &self.selected_lines {
-                if let Some(line) = self.lines.get(*i) {
-                    for p in &line.points {
-                        bbox.extend_with(*p);
-                    }
-                }
-            }
-            if bbox != Rect::NOTHING {
-                // Add some padding
-                let expanded = bbox.expand(5.0);
+        if self.current_tool == Tool::Selection {
+            if let Some((_, expanded, corners)) = self.get_selection_info() {
                 draw_dotted_rect(
                     &painter,
                     expanded,
                     Stroke::new(1.0, Color32::BLUE),
                 );
+
+                let corner_size = vec2(8.0, 8.0);
+                for &corner in &corners {
+                    let rect = Rect::from_center_size(corner, corner_size);
+                    painter.rect_filled(rect, 0.0, Color32::GRAY);
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(1.0, Color32::WHITE),
+                        egui::StrokeKind::Middle,
+                    );
+                }
             }
         }
     }
@@ -461,6 +648,9 @@ impl Default for WhiteboardApp {
             selected_lines: HashSet::new(),
             is_moving_selection: false,
             last_mouse_pos: None,
+            resizing_corner: None,
+            resize_original_bbox: None,
+            resize_original_lines: Vec::new(),
         }
     }
 }
@@ -514,6 +704,8 @@ impl eframe::App for WhiteboardApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let (response, painter) =
                 ui.allocate_painter(ui.available_size(), egui::Sense::drag());
+
+            self.update_cursor(ctx, &response);
 
             if let Some(pointer_pos) = response.interact_pointer_pos() {
                 match self.current_tool {
