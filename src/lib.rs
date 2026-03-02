@@ -35,6 +35,8 @@ enum ResizeCorner {
     BottomRight,
 }
 
+const CANVAS_SIZE: f32 = 5000.0;
+
 pub struct WhiteboardApp {
     lines: Vec<Line>,
     current_line: Vec<Pos2>,
@@ -43,6 +45,10 @@ pub struct WhiteboardApp {
     current_tool: Tool,
     undo_stack: UndoStack,
     whiteboard_file: Option<PathBuf>,
+
+    // View state
+    view_offset: egui::Vec2,
+    initialized: bool,
 
     // Selection tool state
     selection_start: Option<Pos2>,
@@ -147,8 +153,10 @@ impl WhiteboardApp {
                                 let mut deleted_lines = Vec::new();
                                 for index in indices {
                                     if index < self.lines.len() {
-                                        deleted_lines
-                                            .push(self.lines.remove(index));
+                                        deleted_lines.push((
+                                            index,
+                                            self.lines.remove(index),
+                                        ));
                                     }
                                 }
                                 // Reverse to maintain original order for undo if needed,
@@ -156,7 +164,7 @@ impl WhiteboardApp {
                                 // For undo, we need to add them back.
                                 // Since we remove by index descending, the last removed was the first in original list.
                                 // We can just add them to undo stack as Erase action.
-                                self.undo_stack.extend_erase(deleted_lines);
+                                self.undo_stack.add_erase(deleted_lines);
                                 self.selected_lines.clear();
                             }
                         }
@@ -196,11 +204,25 @@ impl WhiteboardApp {
         match self.undo_stack.pop() {
             None => {}
             Some(action) => match action {
-                UndoAction::Erase(line) => {
-                    self.lines.push(line);
+                UndoAction::Erase(mut lines) => {
+                    lines.sort_by_key(|(idx, _)| *idx);
+                    for (index, line) in lines {
+                        if index <= self.lines.len() {
+                            self.lines.insert(index, line);
+                        } else {
+                            self.lines.push(line);
+                        }
+                    }
                 }
-                UndoAction::Draw(_line) => {
+                UndoAction::Draw => {
                     self.lines.pop();
+                }
+                UndoAction::Modify(lines) => {
+                    for (index, line) in lines {
+                        if let Some(target) = self.lines.get_mut(index) {
+                            *target = line;
+                        }
+                    }
                 }
             },
         }
@@ -259,6 +281,7 @@ impl WhiteboardApp {
                         .collect::<Vec<_>>()
                         .into();
                     self.lines = state.lines.iter().map(Into::into).collect();
+                    self.initialized = false;
                 }
                 Err(_) => {
                     rfd::MessageDialog::new()
@@ -315,6 +338,12 @@ impl WhiteboardApp {
                 {
                     self.is_moving_selection = true;
                     self.last_mouse_pos = Some(pointer_pos);
+                    self.resize_original_lines.clear();
+                    for &i in &self.selected_lines {
+                        if let Some(line) = self.lines.get(i) {
+                            self.resize_original_lines.push((i, line.clone()));
+                        }
+                    }
                 } else {
                     self.selected_lines.clear();
                     self.selection_start = Some(pointer_pos);
@@ -340,12 +369,17 @@ impl WhiteboardApp {
                 }
             } else if response.drag_stopped() {
                 if self.resizing_corner.is_some() {
+                    self.undo_stack
+                        .add_modify(self.resize_original_lines.clone());
                     self.resizing_corner = None;
                     self.resize_original_bbox = None;
                     self.resize_original_lines.clear();
                 } else if self.is_moving_selection {
+                    self.undo_stack
+                        .add_modify(self.resize_original_lines.clone());
                     self.is_moving_selection = false;
                     self.last_mouse_pos = None;
+                    self.resize_original_lines.clear();
                 } else if let (Some(start), Some(current)) =
                     (self.selection_start, self.selection_current)
                 {
@@ -406,6 +440,15 @@ impl WhiteboardApp {
     }
 
     fn update_cursor(&self, ctx: &egui::Context, response: &Response) {
+        if self.current_tool == Tool::Move {
+            if response.dragged() {
+                ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            } else {
+                ctx.set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            return;
+        }
+
         if self.current_tool != Tool::Selection {
             return;
         }
@@ -430,6 +473,7 @@ impl WhiteboardApp {
 
         // Handle cursor during hover
         if let Some(pointer_pos) = response.hover_pos() {
+            let canvas_pos = pointer_pos + self.view_offset;
             if let Some((_, expanded_bbox, corners)) = self.get_selection_info()
             {
                 let hit_size = vec2(10.0, 10.0);
@@ -438,15 +482,14 @@ impl WhiteboardApp {
                 let bl_rect = Rect::from_center_size(corners[2], hit_size);
                 let br_rect = Rect::from_center_size(corners[3], hit_size);
 
-                if tl_rect.contains(pointer_pos)
-                    || br_rect.contains(pointer_pos)
+                if tl_rect.contains(canvas_pos) || br_rect.contains(canvas_pos)
                 {
                     ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
-                } else if tr_rect.contains(pointer_pos)
-                    || bl_rect.contains(pointer_pos)
+                } else if tr_rect.contains(canvas_pos)
+                    || bl_rect.contains(canvas_pos)
                 {
                     ctx.set_cursor_icon(egui::CursorIcon::ResizeNeSw);
-                } else if expanded_bbox.contains(pointer_pos) {
+                } else if expanded_bbox.contains(canvas_pos) {
                     ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
             }
@@ -514,26 +557,29 @@ impl WhiteboardApp {
     fn handle_eraser(&mut self, pointer_pos: Pos2) {
         let erase_radius = self.stroke_width + 5.0; // 給予一點點擊容差
 
-        let (kept, deleted): (Vec<_>, Vec<_>) =
-            self.lines.drain(..).partition(|line| {
-                for window in line.points.windows(2) {
-                    if distance_point_to_segment(
-                        pointer_pos,
-                        window[0],
-                        window[1],
-                    ) < erase_radius
-                    {
-                        return false; // false 會進 deleted
-                    }
+        let mut kept = Vec::new();
+        let mut deleted_lines = Vec::new();
+        for (i, line) in self.lines.drain(..).enumerate() {
+            let mut hit = false;
+            for window in line.points.windows(2) {
+                if distance_point_to_segment(pointer_pos, window[0], window[1])
+                    < erase_radius
+                {
+                    hit = true;
+                    break;
                 }
-                true
-            });
+            }
+            if hit {
+                deleted_lines.push((i, line));
+            } else {
+                kept.push(line);
+            }
+        }
 
         self.lines = kept;
-        let deleted_lines = deleted;
         if !deleted_lines.is_empty() {
             self.selected_lines.clear();
-            self.undo_stack.extend_erase(deleted_lines);
+            self.undo_stack.add_erase(deleted_lines);
         }
     }
 
@@ -543,17 +589,14 @@ impl WhiteboardApp {
             color: self.palette.get_current_color(),
             width: self.stroke_width,
         });
-        self.undo_stack.add_draw(Line {
-            points: self.current_line.clone(),
-            color: self.palette.get_current_color(),
-            width: self.stroke_width,
-        });
+        self.undo_stack.add_draw();
         self.current_line.clear();
     }
 
     fn draw_previous_lines(&self, painter: &Painter, i: &usize, line: &Line) {
         if line.points.len() >= 2 {
-            let points = line.points.clone();
+            let points: Vec<Pos2> =
+                line.points.iter().map(|&p| p - self.view_offset).collect();
             let color = if self.selected_lines.contains(&i) {
                 // Highlight selected lines? Or just leave them as is and draw box?
                 // Maybe slight tint?
@@ -575,21 +618,29 @@ impl WhiteboardApp {
             && self.current_tool == Tool::Selection
         {
             let rect = Rect::from_two_pos(start, current);
-            draw_dotted_rect(&painter, rect, Stroke::new(1.0, Color32::GRAY));
+            let screen_rect = rect.translate(-self.view_offset);
+            draw_dotted_rect(
+                &painter,
+                screen_rect,
+                Stroke::new(1.0, Color32::GRAY),
+            );
         }
 
         // Draw bounding box around selected lines
         if self.current_tool == Tool::Selection {
             if let Some((_, expanded, corners)) = self.get_selection_info() {
+                let screen_expanded = expanded.translate(-self.view_offset);
                 draw_dotted_rect(
                     &painter,
-                    expanded,
+                    screen_expanded,
                     Stroke::new(1.0, Color32::BLUE),
                 );
 
                 let corner_size = vec2(8.0, 8.0);
                 for &corner in &corners {
-                    let rect = Rect::from_center_size(corner, corner_size);
+                    let screen_corner = corner - self.view_offset;
+                    let rect =
+                        Rect::from_center_size(screen_corner, corner_size);
                     painter.rect_filled(rect, 0.0, Color32::GRAY);
                     painter.rect_stroke(
                         rect,
@@ -642,6 +693,9 @@ impl Default for WhiteboardApp {
             current_tool: Tool::Brush,
             undo_stack: UndoStack::default(),
             whiteboard_file: None,
+
+            view_offset: egui::Vec2::ZERO,
+            initialized: false,
 
             selection_start: None,
             selection_current: None,
@@ -705,25 +759,77 @@ impl eframe::App for WhiteboardApp {
             let (response, painter) =
                 ui.allocate_painter(ui.available_size(), egui::Sense::drag());
 
+            // Initialize view position to center of canvas
+            if !self.initialized {
+                let size = response.rect.size();
+                self.view_offset = vec2(
+                    CANVAS_SIZE / 2.0 - size.x / 2.0,
+                    CANVAS_SIZE / 2.0 - size.y / 2.0,
+                );
+                self.initialized = true;
+            }
+
+            // Handle scroll wheel panning
+            let (scroll_delta, shift) =
+                ui.input(|i| (i.smooth_scroll_delta, i.modifiers.shift));
+            if scroll_delta != vec2(0.0, 0.0) {
+                let mut dx = scroll_delta.x;
+                let mut dy = scroll_delta.y;
+
+                // If holding shift and scrolling vertically, translate it to horizontal scroll
+                if shift && dx == 0.0 && dy != 0.0 {
+                    dx = dy;
+                    dy = 0.0;
+                }
+
+                self.view_offset.x -= dx;
+                self.view_offset.y -= dy;
+
+                // Limit view offset to stay within canvas bounds
+                let size = response.rect.size();
+                self.view_offset.x =
+                    self.view_offset.x.clamp(0.0, CANVAS_SIZE - size.x);
+                self.view_offset.y =
+                    self.view_offset.y.clamp(0.0, CANVAS_SIZE - size.y);
+            }
+
             self.update_cursor(ctx, &response);
 
             if let Some(pointer_pos) = response.interact_pointer_pos() {
+                let canvas_pos = pointer_pos + self.view_offset;
                 match self.current_tool {
                     Tool::Brush => {
                         if response.dragged()
-                            && self.current_line.last() != Some(&pointer_pos)
+                            && self.current_line.last() != Some(&canvas_pos)
                         {
-                            self.current_line.push(pointer_pos);
+                            self.current_line.push(canvas_pos);
                         }
                     }
                     Tool::Eraser => {
                         // 支援點擊或拖曳時刪除線條
                         if response.clicked() || response.dragged() {
-                            self.handle_eraser(pointer_pos);
+                            self.handle_eraser(canvas_pos);
                         }
                     }
                     Tool::Selection => {
-                        self.handle_selection(&response, pointer_pos)
+                        self.handle_selection(&response, canvas_pos)
+                    }
+                    Tool::Move => {
+                        if response.dragged() {
+                            let delta = response.drag_delta();
+                            self.view_offset -= delta;
+
+                            // Limit view offset to stay within canvas bounds
+                            let size = response.rect.size();
+                            self.view_offset.x = self
+                                .view_offset
+                                .x
+                                .clamp(0.0, CANVAS_SIZE - size.x);
+                            self.view_offset.y = self
+                                .view_offset
+                                .y
+                                .clamp(0.0, CANVAS_SIZE - size.y);
+                        }
                     }
                 }
             }
@@ -746,8 +852,13 @@ impl eframe::App for WhiteboardApp {
             // 繪製正在畫的線條（僅限畫筆模式）
             if self.current_tool == Tool::Brush && self.current_line.len() >= 2
             {
+                let points: Vec<Pos2> = self
+                    .current_line
+                    .iter()
+                    .map(|&p| p - self.view_offset)
+                    .collect();
                 painter.add(egui::Shape::line(
-                    self.current_line.clone(),
+                    points,
                     Stroke::new(
                         self.stroke_width,
                         self.palette.get_current_color(),
