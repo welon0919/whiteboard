@@ -73,6 +73,19 @@ impl WhiteboardApp {
                 } = event
                 {
                     match key {
+                        egui::Key::A if modifiers.command => {
+                            self.selected_lines.clear();
+                            for i in 0..self.lines.len() {
+                                self.selected_lines.insert(i);
+                            }
+                            self.selection_start = None;
+                            self.selection_current = None;
+                            self.is_moving_selection = false;
+                            self.resizing_corner = None;
+                            self.resize_original_bbox = None;
+                            self.resize_original_lines.clear();
+                            self.current_tool = Tool::Selection;
+                        }
                         egui::Key::Z if modifiers.command => {
                             self.undo();
                         }
