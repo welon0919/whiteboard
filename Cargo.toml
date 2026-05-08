@@ -2,8 +2,10 @@
 name = "whiteboard"
 version = "0.1.0"
 edition = "2024"
+default-run  = "whiteboard"
 
 [dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 directories = "6.0.0"
 eframe = "0.33.3"
 egui = "0.33.3"
