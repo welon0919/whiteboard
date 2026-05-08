@@ -1,7 +1,7 @@
 use eframe::{emath::Pos2, epaint::Color32};
 use serde::{Deserialize, Serialize};
 
-use crate::{Line, WhiteboardApp};
+use crate::{Element, Line, TextElement, WhiteboardApp};
 
 #[derive(Serialize, Deserialize)]
 struct Pos {
@@ -23,6 +23,7 @@ impl From<&Pos> for Pos2 {
         Pos2::new(pos.x, pos.y)
     }
 }
+
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub(crate) struct Color(pub(crate) [u8; 4]);
 impl From<&Color32> for Color {
@@ -43,39 +44,74 @@ impl From<Color> for Color32 {
         )
     }
 }
+
 #[derive(Serialize, Deserialize)]
 pub struct LineState {
     points: Vec<Pos>,
     color: Color,
     width: f32,
 }
-impl From<&Line> for LineState {
-    fn from(line: &Line) -> Self {
-        Self {
-            points: line.points.iter().map(Into::into).collect(),
-            color: line.color.into(),
-            width: line.width,
+
+#[derive(Serialize, Deserialize)]
+pub struct TextState {
+    text: String,
+    pos: Pos,
+    size: f32,
+    color: Color,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum ElementState {
+    Line(LineState),
+    Text(TextState),
+}
+
+impl From<&Element> for ElementState {
+    fn from(element: &Element) -> Self {
+        match element {
+            Element::Line(line) => ElementState::Line(LineState {
+                points: line.points.iter().map(Into::into).collect(),
+                color: line.color.into(),
+                width: line.width,
+            }),
+            Element::Text(text) => ElementState::Text(TextState {
+                text: text.text.clone(),
+                pos: (&text.pos).into(),
+                size: text.size,
+                color: text.color.into(),
+            }),
         }
     }
 }
-impl From<&LineState> for Line {
-    fn from(state: &LineState) -> Self {
-        Line {
-            points: state.points.iter().map(Into::into).collect(),
-            color: state.color.into(),
-            width: state.width,
+
+impl From<&ElementState> for Element {
+    fn from(state: &ElementState) -> Self {
+        match state {
+            ElementState::Line(line_state) => Element::Line(Line {
+                points: line_state.points.iter().map(Into::into).collect(),
+                color: line_state.color.into(),
+                width: line_state.width,
+            }),
+            ElementState::Text(text_state) => Element::Text(TextElement {
+                text: text_state.text.clone(),
+                pos: (&text_state.pos).into(),
+                size: text_state.size,
+                color: text_state.color.into(),
+            }),
         }
     }
 }
+
 #[derive(Serialize, Deserialize)]
 pub struct WhiteboardState {
-    pub lines: Vec<LineState>,
+    pub elements: Vec<ElementState>,
     pub(crate) palette: Vec<Color>,
 }
+
 impl WhiteboardState {
     pub fn new(app: &WhiteboardApp) -> Self {
         Self {
-            lines: app.lines.iter().map(Into::into).collect(),
+            elements: app.elements.iter().map(Into::into).collect(),
             palette: app
                 .palette
                 .get_palette_vec()
