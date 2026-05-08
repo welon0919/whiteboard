@@ -1,7 +1,7 @@
 use egui::ImageSource;
 use serde::Serialize;
 
-pub(super) const TOOLS: [(Tool, ImageSource, &str); 5] = [
+pub(super) const TOOLS: [(Tool, ImageSource, &str); 6] = [
     (
         Tool::Brush,
         egui::include_image!("../assets/tools/brush.png"),
@@ -27,6 +27,11 @@ pub(super) const TOOLS: [(Tool, ImageSource, &str); 5] = [
         egui::include_image!("../assets/tools/text.png"),
         "Text Tool",
     ),
+    (
+        Tool::Image,
+        egui::include_image!("../assets/tools/image.png"),
+        "Image Tool",
+    ),
 ];
 
 #[derive(PartialEq, Default, Serialize, Clone, Copy, Debug)]
@@ -37,4 +42,5 @@ pub enum Tool {
     Selection,
     Move,
     Text,
+    Image,
 }

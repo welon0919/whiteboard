@@ -1,4 +1,5 @@
 use egui::{Color32, Pos2, Rect};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Line {
@@ -16,9 +17,18 @@ pub struct TextElement {
 }
 
 #[derive(Debug, Clone)]
+pub struct ImageElement {
+    pub id: u64,
+    pub bytes: Arc<[u8]>,
+    pub pos: Pos2,
+    pub size: egui::Vec2,
+}
+
+#[derive(Debug, Clone)]
 pub enum Element {
     Line(Line),
     Text(TextElement),
+    Image(ImageElement),
 }
 
 impl Element {
@@ -39,6 +49,9 @@ impl Element {
                     f32::INFINITY
                 ));
                 Rect::from_min_size(text_elem.pos, galley.size())
+            }
+            Element::Image(img) => {
+                Rect::from_min_size(img.pos, img.size)
             }
         }
     }

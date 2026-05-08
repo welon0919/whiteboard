@@ -53,6 +53,9 @@ pub struct WhiteboardApp {
     pub editing_text: Option<usize>,
     pub editing_text_original: Option<Element>,
     pub focus_text_editor: bool,
+
+    // Image tool state
+    pub image_id_counter: u64,
 }
 
 impl WhiteboardApp {
@@ -373,6 +376,9 @@ impl WhiteboardApp {
                                     Element::Text(text) => {
                                         text.pos += delta;
                                     }
+                                    Element::Image(img) => {
+                                        img.pos += delta;
+                                    }
                                 }
                             }
                         }
@@ -455,6 +461,14 @@ impl WhiteboardApp {
 
         if self.current_tool == Tool::Text {
             ctx.set_cursor_icon(egui::CursorIcon::Text);
+            return;
+        }
+
+        if self.current_tool == Tool::Image {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            if response.hovered() {
+                response.clone().on_hover_text("Click to put image here");
+            }
             return;
         }
 
@@ -556,6 +570,12 @@ impl WhiteboardApp {
                             text.pos.y = new_bbox.min.y + (orig_text.pos.y - orig_bbox.min.y) * scale_y;
                             text.size = (orig_text.size * scale_y).max(5.0);
                         }
+                        (Element::Image(img), Element::Image(orig_img)) => {
+                            img.pos.x = new_bbox.min.x + (orig_img.pos.x - orig_bbox.min.x) * scale_x;
+                            img.pos.y = new_bbox.min.y + (orig_img.pos.y - orig_bbox.min.y) * scale_y;
+                            img.size.x = (orig_img.size.x * scale_x).max(5.0);
+                            img.size.y = (orig_img.size.y * scale_y).max(5.0);
+                        }
                         _ => {}
                     }
                 }
@@ -581,7 +601,7 @@ impl WhiteboardApp {
                         }
                     }
                 }
-                Element::Text(text) => {
+                Element::Text(_) | Element::Image(_) => {
                     if elem.bounding_box(ctx).expand(erase_radius).contains(pointer_pos) {
                         hit = true;
                     }
@@ -613,6 +633,7 @@ impl WhiteboardApp {
 
     pub fn draw_previous_elements(
         &self,
+        ui: &mut Ui,
         ctx: &egui::Context,
         painter: &Painter,
         i: &usize,
@@ -638,6 +659,14 @@ impl WhiteboardApp {
                     egui::FontId::proportional(text_elem.size),
                     text_elem.color,
                 );
+            }
+            Element::Image(img) => {
+                let screen_pos = img.pos - self.view_offset;
+                let rect = Rect::from_min_size(screen_pos, img.size);
+                let uri = format!("bytes://image_{}.png", img.id);
+                let image = egui::Image::from_bytes(uri, img.bytes.clone())
+                    .fit_to_exact_size(img.size);
+                image.paint_at(ui, rect);
             }
         }
     }
@@ -739,6 +768,8 @@ impl Default for WhiteboardApp {
             editing_text: None,
             editing_text_original: None,
             focus_text_editor: false,
+
+            image_id_counter: 0,
         }
     }
 }
@@ -803,6 +834,7 @@ impl eframe::App for WhiteboardApp {
                     match elem {
                         Element::Line(line) => line.color = new_color,
                         Element::Text(text) => text.color = new_color,
+                        Element::Image(_) => {}
                     }
                 }
             }
@@ -909,6 +941,29 @@ impl eframe::App for WhiteboardApp {
                                 self.current_tool = Tool::Selection;
                             }
                         }
+                        Tool::Image => {
+                            if response.clicked() {
+                                if let Some(path) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif", "bmp"]).pick_file() {
+                                    if let Ok(bytes) = std::fs::read(&path) {
+                                        let id = self.image_id_counter;
+                                        self.image_id_counter += 1;
+                                        let img_elem = crate::element::ImageElement {
+                                            id,
+                                            bytes: std::sync::Arc::from(bytes.into_boxed_slice()),
+                                            pos: canvas_pos,
+                                            size: egui::vec2(200.0, 200.0),
+                                        };
+                                        let idx = self.elements.len();
+                                        self.elements.push(Element::Image(img_elem));
+                                        self.undo_stack.add_draw();
+                                        
+                                        self.selected_elements.clear();
+                                        self.selected_elements.insert(idx);
+                                        self.current_tool = Tool::Selection;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -921,7 +976,7 @@ impl eframe::App for WhiteboardApp {
             }
 
             for (i, elem) in self.elements.iter().enumerate() {
-                self.draw_previous_elements(ctx, &painter, &i, elem);
+                self.draw_previous_elements(ui, ctx, &painter, &i, elem);
             }
 
             self.draw_selections(ctx, &painter);

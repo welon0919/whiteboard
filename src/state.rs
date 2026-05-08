@@ -1,7 +1,7 @@
 use eframe::{emath::Pos2, epaint::Color32};
 use serde::{Deserialize, Serialize};
 
-use crate::{Element, Line, TextElement, WhiteboardApp};
+use crate::{Element, Line, TextElement, element::ImageElement, WhiteboardApp};
 
 #[derive(Serialize, Deserialize)]
 struct Pos {
@@ -61,9 +61,18 @@ pub struct TextState {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ImageState {
+    id: u64,
+    bytes: Vec<u8>,
+    pos: Pos,
+    size: [f32; 2],
+}
+
+#[derive(Serialize, Deserialize)]
 pub enum ElementState {
     Line(LineState),
     Text(TextState),
+    Image(ImageState),
 }
 
 impl From<&Element> for ElementState {
@@ -79,6 +88,12 @@ impl From<&Element> for ElementState {
                 pos: (&text.pos).into(),
                 size: text.size,
                 color: text.color.into(),
+            }),
+            Element::Image(img) => ElementState::Image(ImageState {
+                id: img.id,
+                bytes: img.bytes.to_vec(),
+                pos: (&img.pos).into(),
+                size: [img.size.x, img.size.y],
             }),
         }
     }
@@ -97,6 +112,12 @@ impl From<&ElementState> for Element {
                 pos: (&text_state.pos).into(),
                 size: text_state.size,
                 color: text_state.color.into(),
+            }),
+            ElementState::Image(img_state) => Element::Image(ImageElement {
+                id: img_state.id,
+                bytes: std::sync::Arc::from(img_state.bytes.clone()),
+                pos: (&img_state.pos).into(),
+                size: eframe::egui::vec2(img_state.size[0], img_state.size[1]),
             }),
         }
     }
